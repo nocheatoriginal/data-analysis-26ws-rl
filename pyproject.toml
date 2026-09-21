@@ -1,0 +1,11 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# SDL environment variables must be set before importing Pygame.
+"tests/test_ui.py" = ["E402"]
+"tests/test_display.py" = ["E402"]
