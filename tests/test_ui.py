@@ -6,22 +6,38 @@ os.environ["SDL_VIDEODRIVER"] = "dummy"
 os.environ["SDL_AUDIODRIVER"] = "dummy"
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
+import tempfile
 import unittest
 
+import numpy as np
 import pygame as pg
 
-from src.model.learning import TrainingSession
+from src.model.checkpoints import train_checkpoints
 from src.ui import theme
 from src.ui.dashboard import Dashboard
 
 
 class DashboardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.output = tempfile.TemporaryDirectory()
+        train_checkpoints(cls.output.name, checkpoints=(1, 50, 100))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.output.cleanup()
+
     def test_views_controls_selection_and_playback(self):
-        dashboard = Dashboard(TrainingSession())
+        dashboard = Dashboard(self.output.name)
         try:
+            before = dashboard.session.total_steps
+            q = dashboard.session.agent.q.copy()
             dashboard.draw()
-            dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_n))
-            self.assertEqual(dashboard.session.total_steps, 1)
+            dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_SPACE))
+            dashboard.advance(1 / theme.SPEEDS[dashboard.speed])
+            dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_SPACE))
+            self.assertEqual(dashboard.session.total_steps, before)
+            self.assertEqual(dashboard.watch_index, 1)
             self.assertEqual(dashboard.detail, "update")
             for view in range(4):
                 dashboard.view = view
@@ -32,33 +48,52 @@ class DashboardTests(unittest.TestCase):
             click = (dashboard.table_body.x + 10, dashboard.table_body.y + 10)
             dashboard.handle_event(pg.event.Event(pg.MOUSEBUTTONDOWN, button=1, pos=click))
             self.assertEqual(dashboard.selected, dashboard.scroll)
-            dashboard.action("watch")
-            before = dashboard.session.total_steps
+            dashboard.action("play")
             dashboard.advance(1)
             dashboard.draw()
             self.assertEqual(dashboard.session.total_steps, before)
-            dashboard.action("run")
-            dashboard.advance(0.1)
-            self.assertGreater(dashboard.session.total_steps, before)
-            dashboard.action("reset")
+            np.testing.assert_array_equal(dashboard.session.agent.q, q)
+            dashboard.action("restart")
             self.assertFalse(dashboard.running)
-            self.assertEqual(dashboard.session.total_steps, 0)
-            self.assertIsNone(dashboard.watch)
-            dashboard.action("batch")
-            # Exercise automatic stopping at an episode boundary cheaply.
-            dashboard.target = 1
-            for _ in range(100):
-                dashboard.advance(0.1)
-                if not dashboard.running:
-                    break
+            self.assertEqual(dashboard.watch_index, 0)
+            dashboard.action("mode")
+            self.assertEqual(dashboard.playback_mode, "route")
+            dashboard.action("play")
+            dashboard.advance(1000)
             self.assertFalse(dashboard.running)
-            self.assertEqual(len(dashboard.session.history), 1)
+            self.assertEqual(dashboard.watch_index, len(dashboard.watch["steps"]))
+            np.testing.assert_array_equal(dashboard.session.agent.q, q)
+            dashboard.action("checkpoint:50")
+            self.assertEqual(len(dashboard.session.history), 50)
+            self.assertEqual(dashboard.watch_index, 0)
+            self.assertFalse(dashboard.session.agent.q.flags.writeable)
+            dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_3))
+            self.assertEqual(dashboard.checkpoint, 100)
+            self.assertEqual(len(dashboard.session.history), 100)
+        finally:
+            dashboard.display.close()
+            pg.quit()
+
+    def test_playback_speeds_and_pause(self):
+        dashboard = Dashboard(self.output.name)
+        try:
+            for index, moves in enumerate((1, 5, 10, 20)):
+                dashboard.speed = index
+                dashboard.action("restart")
+                dashboard.action("play")
+                dashboard.advance(1.001)
+                self.assertEqual(dashboard.watch_index, moves)
+                dashboard.action("play")
+                dashboard.advance(1)
+                self.assertEqual(dashboard.watch_index, moves)
+            dashboard.draw()
+            self.assertNotIn("step", [action for _, action in dashboard.buttons])
         finally:
             dashboard.display.close()
             pg.quit()
 
     def test_resize_keeps_text_size_and_click_targets(self):
-        dashboard = Dashboard(TrainingSession())
+        dashboard = Dashboard(self.output.name)
         try:
             original_font_size = dashboard.font().size("Q-learning")
             for width, height in (theme.MIN_SIZE, theme.DEFAULT_SIZE, (1600, 1000)):

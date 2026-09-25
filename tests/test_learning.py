@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from gymnasium.utils.env_checker import check_env
 
-from src.model.environment import Action, AdventureEnv
+from src.model.environment import Action, AdventureEnv, Tile
 from src.model.learning import Config, QLearner, TrainingSession
 
 
@@ -16,27 +16,53 @@ class EnvironmentTests(unittest.TestCase):
         check_env(AdventureEnv(), skip_render_check=True)
 
     def test_rewards_and_blocked_movement(self):
-        env = AdventureEnv(("S.TG", ".#~."))
+        env = AdventureEnv(
+            (
+                (Tile.START, Tile.EMPTY, Tile.TRAP, Tile.GOAL),
+                (Tile.EMPTY, Tile.WALL, Tile.WATER, Tile.EMPTY),
+            )
+        )
         self.assertEqual(env.reset(seed=1)[0], 0)
         self.assertEqual(env.step(Action.UP)[:4], (0, -5, False, False))
         self.assertEqual(env.step(Action.RIGHT)[:4], (1, -1, False, False))
+        self.assertEqual(env.step(Action.LEFT)[:4], (0, -1, False, False))
+        self.assertEqual(env.step(Action.RIGHT)[:4], (1, -1, False, False))
         self.assertEqual(env.step(Action.DOWN)[:4], (1, -5, False, False))
-        self.assertEqual(env.step(Action.RIGHT)[:4], (2, -15, False, False))
-        self.assertEqual(env.step(Action.DOWN)[:4], (2, -5, False, False))
-        self.assertEqual(env.step(Action.RIGHT)[:4], (3, 100, True, False))
+        self.assertEqual(env.step(Action.RIGHT)[:4], (2, -20, False, False))
+        water_step = env.step(Action.DOWN)
+        self.assertEqual(water_step[:4], (6, -3, False, False))
+        self.assertEqual(water_step[4]["event"], "water")
+        self.assertEqual(env.step(Action.RIGHT)[:4], (7, -1, False, False))
+        self.assertEqual(env.step(Action.UP)[:4], (3, 100, True, False))
         with self.assertRaises(RuntimeError):
             env.step(Action.LEFT)
         self.assertEqual(env.reset()[0], 0)
 
+    def test_goal_can_be_reached_through_water(self):
+        env = AdventureEnv(((Tile.START, Tile.WATER, Tile.GOAL),))
+        self.assertEqual(env.shortest_safe_path(), [0, 1, 2])
+        env.reset()
+        self.assertEqual(env.step(Action.RIGHT)[:4], (1, -3, False, False))
+        self.assertEqual(env.step(Action.RIGHT)[:4], (2, 100, True, False))
+
     def test_time_limit_is_truncation_and_goal_takes_priority(self):
-        env = AdventureEnv(("SG",), max_steps=1)
+        env = AdventureEnv(((Tile.START, Tile.GOAL),), max_steps=1)
         env.reset()
         self.assertEqual(env.step(Action.UP)[2:4], (False, True))
         env.reset()
         self.assertEqual(env.step(Action.RIGHT)[2:4], (True, False))
 
     def test_invalid_maps_and_actions(self):
-        for layout in [(), ("S", "..G"), ("S#G",), ("SGX",), ("SSG",)]:
+        for layout in [
+            (),
+            ((Tile.START,), (Tile.EMPTY, Tile.EMPTY, Tile.GOAL)),
+            ((Tile.START, Tile.WALL, Tile.GOAL),),
+            ((Tile.START, Tile.GOAL, "X"),),
+            ((Tile.START, Tile.START, Tile.GOAL),),
+            ((Tile.EMPTY, Tile.GOAL),),
+            ((Tile.START, Tile.EMPTY),),
+            ("SG",),  # Legacy symbol maps must not be silently accepted.
+        ]:
             with self.assertRaises(ValueError):
                 AdventureEnv(layout)
         env = AdventureEnv()
@@ -44,9 +70,12 @@ class EnvironmentTests(unittest.TestCase):
             env.step(4)
 
     def test_ansi_render_and_state_encoding(self):
-        env = AdventureEnv(("S.G",), render_mode="ansi")
+        env = AdventureEnv(((Tile.START, Tile.EMPTY, Tile.GOAL),), render_mode="ansi")
         self.assertEqual(env.render(), "@ . G")
         self.assertEqual(env.position(2), (0, 2))
+        self.assertIs(env.tile(0), Tile.START)
+        self.assertIs(env.tile(1), Tile.EMPTY)
+        self.assertIs(env.tile(2), Tile.GOAL)
 
 
 class LearningTests(unittest.TestCase):
@@ -65,7 +94,8 @@ class LearningTests(unittest.TestCase):
 
     def test_truncation_keeps_bootstrap_in_training(self):
         session = TrainingSession(
-            AdventureEnv(("S.G",), max_steps=1), Config(epsilon_start=0, epsilon_min=0)
+            AdventureEnv(((Tile.START, Tile.EMPTY, Tile.GOAL),), max_steps=1),
+            Config(epsilon_start=0, epsilon_min=0),
         )
         session.agent.q[0, Action.RIGHT] = 1
         session.agent.q[1, Action.RIGHT] = 10
@@ -121,14 +151,13 @@ class LearningTests(unittest.TestCase):
                 session.train(2000)
                 result = session.greedy_rollout()
                 self.assertTrue(result["success"])
-                self.assertFalse(any(session.env.tile(s) == "T" for s in result["path"]))
-                self.assertEqual(len(result["path"]), len(session.env.shortest_safe_path()))
+                self.assertFalse(any(session.env.tile(s) == Tile.TRAP for s in result["path"]))
                 env, gamma = session.env, session.config.gamma
                 values = np.zeros(env.observation_space.n)
                 for _ in range(500):
                     updated = values.copy()
                     for state in range(len(values)):
-                        if env.tile(state) in "#~G":
+                        if env.tile(state) in (Tile.WALL, Tile.GOAL):
                             continue
                         candidates = []
                         for action in Action:
@@ -154,10 +183,24 @@ class LearningTests(unittest.TestCase):
                 rows = list(csv.DictReader(file))
             self.assertEqual(len(rows), 80)
             self.assertIn("UP", rows[0])
+            self.assertEqual(rows[0]["tile"], "START")
             with (Path(directory) / "episodes.csv").open() as file:
                 self.assertEqual(len(list(csv.DictReader(file))), 3)
             summary = json.loads((Path(directory) / "summary.json").read_text())
             self.assertEqual(summary["episodes"], 3)
+            self.assertEqual(
+                summary["map"], [[tile.name for tile in row] for row in session.env.layout]
+            )
+            self.assertEqual(
+                summary["rewards"],
+                {
+                    "path": -1,
+                    "water": -3,
+                    "blocked": -5,
+                    "trap": -20,
+                    "goal": 100,
+                },
+            )
 
 
 if __name__ == "__main__":

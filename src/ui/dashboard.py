@@ -1,4 +1,4 @@
-"""Pygame UI: layout, drawing, input handling and a timed training loop.
+"""Pygame UI: layout, drawing, input handling and saved episode playback.
 
 Layout and clicks use logical window coordinates. display.py renders text at
 the physical pixel density of the current display, including Retina screens.
@@ -10,14 +10,20 @@ from pathlib import Path
 import numpy as np
 import pygame as pg
 
-from ..model.environment import ACTION_NAMES, DELTAS, AdventureEnv
-from ..model.learning import TrainingSession
+from ..model.checkpoints import CHECKPOINTS, DEFAULT_OUTPUT, load_checkpoint, recorded_episode
+from ..model.environment import ACTION_NAMES, DELTAS, Tile
+from ..model.learning import Config
 from . import theme
 from .display import Display, TextLabel
 
 
 class Dashboard:
-    def __init__(self, session: TrainingSession, output="outputs", diagnose_display=False):
+    def __init__(
+        self, output=DEFAULT_OUTPUT, config=Config(), checkpoint=1, diagnose_display=False
+    ):
+        self.config = config
+        self.checkpoint = checkpoint
+        session = load_checkpoint(output, checkpoint, config)
         pg.init()
         desktop_width, desktop_height = pg.display.get_desktop_sizes()[0]
         size = (
@@ -34,21 +40,16 @@ class Dashboard:
 
         self.alive = True
         self.running = False
-        self.target = None  # Episode at which accelerated training should pause.
         self.speed = 1
-        self.credit = 0.0  # Accumulated time expressed as training steps.
         self.view = 0
-        self.detail = "chart"  # Show one explanation at a time.
+        self.detail = "update"  # Show one explanation at a time.
         self.selected = session.env.start
         self.scroll = 0
         self.watch = None
         self.watch_index = 0
         self.watch_elapsed = 0.0
-        self.status = "Ready. Run training or press N to learn one transition."
-        if session.history:
-            self.status = (
-                f"{len(session.history):,} episodes trained. Press W to watch the learned route."
-            )
+        self.playback_mode = "episode"
+        self.restart_playback()
         self.update_layout()
 
     def update_layout(self):
@@ -156,12 +157,16 @@ class Dashboard:
 
     def draw_header(self):
         self.text("relearn", theme.MARGIN, 20, 26, bold=True)
-        self.text("Learn by trying. Find a route to the goal.", theme.MARGIN, 57, color=theme.MUTED)
+        x = theme.MARGIN
+        for episode in CHECKPOINTS:
+            x = self.button(
+                str(episode), x, f"checkpoint:{episode}", episode == self.checkpoint, y=55
+            )
         recent = self.session.history[-100:]
         success = f"{sum(item['success'] for item in recent) / len(recent):.0%}" if recent else "--"
         stats = (
             ("Episodes", f"{len(self.session.history):,}"),
-            ("Exploration", f"{self.session.epsilon:.1%}"),
+            ("Playback step", f"{self.watch_index}/{len(self.watch['steps'])}"),
             ("Success (last 100)", success),
         )
         for index, (label, value) in enumerate(stats):
@@ -169,14 +174,15 @@ class Dashboard:
             self.text(label, x, 22, color=theme.MUTED)
             self.text(value, x, 47, 20, mono=True)
         controls = (
-            ("Pause" if self.running else "Run", "run", self.running),
-            ("Step", "step", False),
-            ("Train +500", "batch", self.target is not None),
-            ("Watch route", "watch", self.watch is not None),
+            ("Pause" if self.running else "Play", "play", self.running),
+            ("Restart", "restart", False),
+            (
+                "Training episode" if self.playback_mode == "episode" else "Learned route",
+                "mode",
+                False,
+            ),
             (f"View: {theme.VIEWS[self.view]}", "view", False),
-            (f"{theme.SPEEDS[self.speed]:,} steps/s", "speed", False),
-            ("Export", "export", False),
-            ("Reset", "reset", False),
+            (f"{theme.SPEEDS[self.speed]} moves/s", "speed", False),
         )
         x = theme.MARGIN
         for label, action, active in controls:
@@ -212,15 +218,19 @@ class Dashboard:
         rect.center = center
         visits = int(self.session.agent.visits[state].sum())
         color = pg.Color(theme.TILE_COLORS[tile])
-        if self.view == 2 and tile not in "#~G":
+        if self.view == 2 and tile not in (Tile.WALL, Tile.GOAL):
             intensity = np.log1p(visits) / np.log1p(max_visits)
             color = pg.Color(theme.SURFACE).lerp(pg.Color(theme.VISIT_HIGH), intensity)
         pg.draw.rect(self.window, color, rect)
         pg.draw.rect(self.window, theme.BORDER, rect, 1)
 
-        if tile in "#~G":
-            symbol_color = {"#": theme.MUTED, "~": theme.BLUE, "G": theme.YELLOW}[tile]
-            self.text(tile, *center, 20, symbol_color, mono=True, center=True)
+        if tile in (Tile.WALL, Tile.GOAL):
+            symbol_color = {
+                Tile.WALL: theme.MUTED,
+                Tile.WATER: theme.BLUE,
+                Tile.GOAL: theme.YELLOW,
+            }[tile]
+            self.text(tile.symbol, *center, 20, symbol_color, mono=True, center=True)
         elif self.view == 1:
             self.draw_q_values(state, rect)
         elif self.view == 2:
@@ -231,9 +241,11 @@ class Dashboard:
         else:
             pg.draw.circle(self.window, theme.BORDER, center, 2)
 
-        if tile in "ST" and self.view != 1:
-            label_color = theme.GREEN if tile == "S" else theme.RED
-            self.text(tile, rect.x + 5, rect.y + 3, 13, label_color, bold=True)
+        if tile in (Tile.START, Tile.TRAP, Tile.WATER) and self.view != 1:
+            label_color = {Tile.START: theme.GREEN, Tile.TRAP: theme.RED, Tile.WATER: theme.BLUE}[
+                tile
+            ]
+            self.text(tile.symbol, rect.x + 5, rect.y + 3, 13, label_color, bold=True)
         if state == self.selected:
             pg.draw.rect(self.window, theme.BLUE, rect.inflate(-2, -2), 2)
 
@@ -260,6 +272,10 @@ class Dashboard:
         x, y = self.coords(current)
         marker = (x + self.cell_size // 2 - 8, y - self.cell_size // 2 + 8)
         pg.draw.circle(self.window, theme.BLUE, marker, 5)
+        if self.watch_index:
+            step = self.watch["steps"][self.watch_index - 1]
+            if step["event"] == "blocked":
+                self.arrow(self.coords(step["state"]), step["action"], theme.RED)
         self.text(
             "Click a tile to inspect its action values.",
             self.world_panel.x + 12,
@@ -291,7 +307,7 @@ class Dashboard:
                 self.text(label, x, row.y + 6, 13, mono=True)
             for action in range(4):
                 value = self.session.agent.q[state, action]
-                label = "--" if tile in "#~G" else f"{value:.1f}"
+                label = "--" if tile in (Tile.WALL, Tile.GOAL) else f"{value:.1f}"
                 self.text(
                     label, columns[action + 3], row.y + 6, 13, self.value_color(value), mono=True
                 )
@@ -310,7 +326,7 @@ class Dashboard:
         for label, name in (
             ("Learning curve", "chart"),
             ("Selected tile", "tile"),
-            ("Learning step", "update"),
+            ("Playback step", "update"),
         ):
             x = self.button(label, x, name, self.detail == name, y=150)
         if self.detail == "tile":
@@ -353,50 +369,48 @@ class Dashboard:
             self.text(int(agent.visits[state, action]), panel.right - 60, row_y, mono=True)
         note = (
             "No decisions on blocked or terminal tiles."
-            if tile in "#~G"
+            if tile in (Tile.WALL, Tile.GOAL)
             else "Q = estimated discounted return"
         )
         self.text(note, x, y + 151, 13, theme.MUTED)
 
     def draw_update(self):
         panel = self.update_panel
-        self.panel(panel, "Last Q-learning update")
-        x, y = panel.x + 12, panel.y + 45
-        update = self.session.last_update
-        if update is None:
-            self.text("Q(s, a) += alpha * (target - Q(s, a))", x, y, mono=True)
-            self.text("target = reward + gamma * max Q(next state)", x, y + 27, 13, theme.MUTED)
-            self.text("Press N to see one update.", x, y + 64, color=theme.MUTED)
+        self.panel(
+            panel,
+            "Recorded training step" if self.playback_mode == "episode" else "Learned policy step",
+        )
+        x, y = panel.x + 12, panel.y + 48
+        if self.watch_index == 0:
+            self.text("Press Play to start.", x, y)
+            self.text("Training is complete. Playback does not learn.", x, y + 30, 13, theme.MUTED)
             return
-        config = self.session.config
-        action = ACTION_NAMES[update["action"]].lower()
+        step = self.watch["steps"][self.watch_index - 1]
         self.text(
-            f"s{update['state']} / {action} / s{update['next_state']} / reward {update['reward']:+.0f}",
-            x,
-            y,
+            f"{ACTION_NAMES[step['action']]}: state {step['state']} to {step['next_state']}", x, y
         )
         self.text(
-            f"target = {update['reward']:.0f} + {config.gamma:g} * {update['future']:.2f} = {update['target']:.2f}",
+            f"{step['event'].capitalize()} / reward {step['reward']:+g}",
             x,
-            y + 25,
-            13,
-            mono=True,
+            y + 30,
+            color=self.value_color(step["reward"]),
         )
-        self.text(
-            f"Q: {update['old']:.2f} + {config.alpha:g} * ({update['target']:.2f} - {update['old']:.2f}) = {update['new']:.2f}",
-            x,
-            y + 49,
-            13,
-            theme.BLUE,
-            mono=True,
-        )
-        mode = "Explore" if update["exploratory"] else "Exploit"
-        detail = update["event"]
-        if update["terminated"]:
-            detail = "goal / future return = 0"
-        elif update["truncated"]:
-            detail = "time limit / bootstrap kept"
-        self.text(f"{mode} / {detail}", x, y + 78, 13, theme.MUTED)
+        mode = "Exploration (random action)" if step["exploratory"] else "Best known action"
+        self.text(mode, x, y + 60, color=theme.MUTED)
+        if step["event"] == "blocked":
+            self.text("Invalid move: the agent stays in place.", x, y + 90, color=theme.RED)
+        elif step["event"] == "water":
+            self.text("Crossed water: movement costs 3 points.", x, y + 90)
+        elif step["event"] == "trap":
+            self.text("Entered a trap: 20 points lost.", x, y + 90, color=theme.RED)
+        if self.playback_mode == "episode":
+            self.text(
+                f"Recorded Q update: {step['old']:.2f} -> {step['new']:.2f}", x, y + 130, mono=True
+            )
+        total = sum(item["reward"] for item in self.watch["steps"][: self.watch_index])
+        self.text(f"Playback return: {total:+g}", x, y + 165)
+        if self.watch_index == len(self.watch["steps"]):
+            self.text(f"Finished: {self.watch['reason']}", x, y + 200, bold=True)
 
     def draw_chart(self):
         panel = self.chart_panel
@@ -445,12 +459,14 @@ class Dashboard:
         self.text("Rewards", x, y, bold=True)
         rewards = self.session.env.rewards
         self.text(
-            f"Path {rewards['path']:+g}   Trap {rewards['trap']:+g}   Goal {rewards['goal']:+g}   Blocked {rewards['blocked']:+g}",
+            f"Start/empty {rewards['path']:+g}   Water {rewards['water']:+g}   "
+            f"Invalid {rewards['blocked']:+g}   Trap {rewards['trap']:+g}   Goal {rewards['goal']:+g}",
             x,
             y + 24,
+            13,
         )
         self.text(
-            "S start   G goal   T trap   # wall   ~ river   /   Blue dot: agent",
+            "S start   G goal   T trap   # wall   ~ water   /   Blue dot: agent",
             x,
             y + 49,
             13,
@@ -467,7 +483,7 @@ class Dashboard:
             color=theme.MUTED,
         )
         self.text(
-            f"Episode: {self.session.env.steps}/{self.session.env.max_steps} steps / return {self.session.episode_return:+.0f}",
+            f"Saved after {self.checkpoint:,} episodes / Q-table frozen",
             x,
             y + 49,
             13,
@@ -509,70 +525,63 @@ class Dashboard:
                 self.diagnose_display = False
             self.next_diagnostic = time.monotonic() + 5
 
-    def stop_training(self):
+    def restart_playback(self):
+        """Rewind a recording or evaluate the saved policy without changing it."""
         self.running = False
-        self.target = None
-        self.credit = 0.0
+        self.watch_index = 0
+        self.watch_elapsed = 0.0
+        self.selected = self.session.env.start
+        self.watch = (
+            recorded_episode(self.session)
+            if self.playback_mode == "episode"
+            else self.session.greedy_rollout()
+        )
+        self.status = (
+            f"Saved after {self.checkpoint} episodes. Press Space to play or pause."
+        )
+
+    def playback_step(self):
+        if self.watch_index < len(self.watch["steps"]):
+            step = self.watch["steps"][self.watch_index]
+            self.watch_index += 1
+            self.selected = step["next_state"]
+            self.status = (
+                f"Move {self.watch_index}: {ACTION_NAMES[step['action']]} / "
+                f"{step['event']} / reward {step['reward']:+g}"
+            )
+        if self.watch_index == len(self.watch["steps"]):
+            self.running = False
+            self.status += f" / Finished: {self.watch['reason']}"
 
     def action(self, action):
-        """Toolbar and keyboard commands share the same code path."""
-        if action in ("chart", "tile", "update"):
+        """All controls operate on playback; none call the training loop."""
+        if action.startswith("checkpoint:"):
+            episode = int(action.split(":")[1])
+            try:
+                session = load_checkpoint(self.output, episode, self.config)
+            except (OSError, ValueError, KeyError, TypeError, EOFError) as error:
+                self.status = f"Cannot load checkpoint: {error}"
+                return
+            self.session = session
+            self.checkpoint = episode
+            self.selected = session.env.start
+            self.scroll = 0
+            self.restart_playback()
+        elif action in ("chart", "tile", "update"):
             self.detail = action
         elif action == "view":
             self.view = (self.view + 1) % len(theme.VIEWS)
         elif action == "speed":
             self.speed = (self.speed + 1) % len(theme.SPEEDS)
-        elif action == "export":
-            self.export()
-        elif action == "reset":
-            self.reset()
-        elif action == "watch":
-            self.start_playback()
-        elif action == "run":
-            was_running = self.running
-            self.stop_training()
-            self.watch = None
-            self.running = not was_running
-            self.status = "Training." if self.running else "Paused."
-        elif action == "step":
-            self.stop_training()
-            self.watch = None
-            update = self.session.step()
-            self.selected = update["state"]
-            self.detail = "update"
-            self.status = "One transition learned. The updated state is selected."
-        elif action == "batch":
-            self.watch = None
-            self.target = len(self.session.history) + 500
-            self.running = True
-            self.status = f"Training until episode {self.target:,}."
-
-    def reset(self):
-        env = self.session.env
-        self.session = TrainingSession(AdventureEnv(env.layout, env.max_steps), self.session.config)
-        self.stop_training()
-        self.watch = None
-        self.selected = self.session.env.start
-        self.scroll = 0
-        self.status = "Reset. Same map and seed; all Q-values are zero."
-
-    def export(self):
-        try:
-            path = self.session.export(self.output)
-            self.status = f"Exported Q-table, episode metrics and evaluation to {path.resolve()}"
-        except OSError as error:
-            self.status = f"Export failed: {error}"
-
-    def start_playback(self):
-        self.stop_training()
-        self.watch = self.session.greedy_rollout()
-        self.watch_index = 0
-        self.watch_elapsed = 0.0
-        result = self.watch
-        self.status = (
-            f"Greedy playback: {result['reason']} / {len(result['path']) - 1} moves / "
-            f"return {result['return']:+.0f}. Q-table frozen."
-        )
+        elif action == "mode":
+            self.playback_mode = "route" if self.playback_mode == "episode" else "episode"
+            self.restart_playback()
+        elif action == "restart":
+            self.restart_playback()
+        elif action == "play":
+            if self.watch_index == len(self.watch["steps"]):
+                self.restart_playback()
+            self.running = not self.running
 
     def handle_click(self, position):
         for rect, action in self.buttons:
@@ -601,19 +610,17 @@ class Dashboard:
             self.update_layout()
         elif event.type == pg.KEYDOWN:
             shortcuts = {
-                pg.K_SPACE: "run",
-                pg.K_n: "step",
-                pg.K_w: "watch",
+                pg.K_SPACE: "play",
+                pg.K_w: "mode",
                 pg.K_q: "view",
-                pg.K_e: "export",
-                pg.K_r: "reset",
+                pg.K_r: "restart",
             }
             if event.key == pg.K_ESCAPE:
                 self.alive = False
             elif event.key in shortcuts:
                 self.action(shortcuts[event.key])
-            elif pg.K_1 <= event.key <= pg.K_4:
-                self.speed = event.key - pg.K_1
+            elif pg.K_1 <= event.key <= pg.K_8:
+                self.action(f"checkpoint:{CHECKPOINTS[event.key - pg.K_1]}")
         elif event.type == pg.MOUSEWHEEL and self.view == 3:
             self.scroll -= event.y * 3
             self.clamp_scroll()
@@ -621,31 +628,14 @@ class Dashboard:
             self.handle_click(event.pos)
 
     def advance(self, dt):
-        """Leave time for UI events even during accelerated training."""
-        if self.watch is not None:
-            self.watch_elapsed += dt
-            if self.watch_elapsed >= 0.22:
-                self.watch_elapsed = 0.0
-                self.watch_index = min(self.watch_index + 1, len(self.watch["path"]) - 1)
+        """Advance the animation clock, never the learning session."""
         if not self.running:
             return
-        self.credit = min(3000, self.credit + dt * theme.SPEEDS[self.speed])
-        budget = 3000 if self.target is not None else int(self.credit)
-        deadline = time.perf_counter() + 0.012
-        for _ in range(budget):
-            self.session.step()
-            if self.target is None:
-                self.credit -= 1
-            if self.target is not None and len(self.session.history) >= self.target:
-                self.stop_training()
-                result = self.session.greedy_rollout()
-                self.status = (
-                    f"Training complete: {result['reason']} / "
-                    f"{len(result['path']) - 1} moves / return {result['return']:+.0f}. Press W to watch."
-                )
-                break
-            if time.perf_counter() >= deadline:
-                break
+        self.watch_elapsed += dt
+        interval = 1 / theme.SPEEDS[self.speed]
+        while self.running and self.watch_elapsed >= interval:
+            self.watch_elapsed -= interval
+            self.playback_step()
 
     def run(self):
         clock = pg.time.Clock()

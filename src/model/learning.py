@@ -82,6 +82,7 @@ class TrainingSession:
         self.total_steps = 0
         self.pending_reset = False
         self.trail = [self.state]
+        self.episode_steps = []
 
     def step(self):
         """Learn one transition, leaving its result visible until the next step."""
@@ -89,6 +90,7 @@ class TrainingSession:
             self.state, _ = self.env.reset()
             self.episode_return = 0.0
             self.trail = [self.state]
+            self.episode_steps = []
             self.pending_reset = False
         state = self.state
         action, exploratory = self.agent.choose(state, self.epsilon)
@@ -96,6 +98,7 @@ class TrainingSession:
         # Time limits do NOT remove the bootstrap term: only a real terminal does.
         self.last_update = self.agent.update(state, action, reward, next_state, terminated)
         self.last_update.update(exploratory=exploratory, event=info["event"], truncated=truncated)
+        self.episode_steps.append(dict(self.last_update))
         self.state = next_state
         self.trail.append(next_state)
         self.episode_return += reward
@@ -126,17 +129,37 @@ class TrainingSession:
     def greedy_rollout(self):
         """Evaluate without changing Q-values, training state, or its RNG."""
         state, path, total = self.env.start, [self.env.start], 0.0
+        steps = []
+        reason = "step limit"
         for _ in range(self.env.max_steps):
             action = int(np.argmax(self.agent.q[state]))
-            nxt, reward, terminated, _ = self.env.transition(state, action)
+            nxt, reward, terminated, event = self.env.transition(state, action)
+            steps.append(
+                {
+                    "state": state,
+                    "action": action,
+                    "next_state": nxt,
+                    "reward": reward,
+                    "event": event,
+                    "exploratory": False,
+                }
+            )
             total += reward
             path.append(nxt)
             if terminated:
-                return {"path": path, "return": total, "success": True, "reason": "goal"}
+                reason = "goal"
+                break
             if nxt in path[:-1]:
-                return {"path": path, "return": total, "success": False, "reason": "loop"}
+                reason = "loop"
+                break
             state = nxt
-        return {"path": path, "return": total, "success": False, "reason": "step limit"}
+        return {
+            "path": path,
+            "steps": steps,
+            "return": total,
+            "success": reason == "goal",
+            "reason": reason,
+        }
 
     def export(self, directory):
         """Write plain CSV/JSON files for analysis; this is not a checkpoint."""
@@ -162,7 +185,7 @@ class TrainingSession:
                     [
                         state,
                         *self.env.position(state),
-                        self.env.tile(state),
+                        self.env.tile(state).name,
                         *values,
                         *self.agent.visits[state],
                     ]
@@ -176,7 +199,7 @@ class TrainingSession:
         reference = self.env.shortest_safe_path()
         summary = {
             "config": asdict(self.config),
-            "map": self.env.layout,
+            "map": [[tile.name for tile in row] for row in self.env.layout],
             "rewards": self.env.rewards,
             "max_steps": self.env.max_steps,
             "episodes": len(self.history),

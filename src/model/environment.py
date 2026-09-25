@@ -1,7 +1,7 @@
 """Deterministic grid world using the Gymnasium reset/step interface."""
 
 from collections import deque
-from enum import IntEnum
+from enum import Enum, IntEnum, auto
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -16,46 +16,75 @@ class Action(IntEnum):
 
 ACTION_NAMES = ("UP", "RIGHT", "DOWN", "LEFT")
 DELTAS = ((-1, 0), (0, 1), (1, 0), (0, -1))
+
+
+class Tile(Enum):
+    """The map stores tile types; symbols are only used for display."""
+
+    START = auto()
+    WALL = auto()
+    EMPTY = auto()
+    WATER = auto()
+    TRAP = auto()
+    GOAL = auto()
+
+    @property
+    def symbol(self):
+        return {
+            Tile.START: "S",
+            Tile.WALL: "#",
+            Tile.EMPTY: ".",
+            Tile.WATER: "~",
+            Tile.TRAP: "T",
+            Tile.GOAL: "G",
+        }[self]
+
+
+# Keep each map row on one line so the grid remains easy to edit.
+# fmt: off
 DEFAULT_MAP = (
-    "S...#.....",
-    ".##.#.T.#.",
-    "..T...~.#.",
-    ".###..~...",
-    "...T..~.#.",
-    ".#.#..~.#.",
-    ".#...T...G",
-    "...#...#..",
+    (Tile.START, Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.EMPTY),
+    (Tile.EMPTY, Tile.WALL , Tile.WALL , Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.TRAP , Tile.EMPTY, Tile.WALL , Tile.EMPTY),
+    (Tile.EMPTY, Tile.EMPTY, Tile.TRAP , Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.WATER, Tile.EMPTY, Tile.WALL , Tile.EMPTY),
+    (Tile.EMPTY, Tile.WALL , Tile.WALL , Tile.WALL , Tile.EMPTY, Tile.EMPTY, Tile.WATER, Tile.EMPTY, Tile.EMPTY, Tile.EMPTY),
+    (Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.TRAP , Tile.EMPTY, Tile.EMPTY, Tile.WATER, Tile.EMPTY, Tile.WALL , Tile.EMPTY),
+    (Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.EMPTY, Tile.WATER, Tile.EMPTY, Tile.WALL , Tile.EMPTY),
+    (Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.TRAP , Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.GOAL ),
+    (Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.EMPTY, Tile.EMPTY, Tile.WALL , Tile.EMPTY, Tile.EMPTY),
 )
+# fmt: on
 
 
 class AdventureEnv(gym.Env):
-    """One state per tile; actions into water/walls leave the agent in place.
+    """One state per tile; only walls and grid boundaries block movement.
 
-    A trap is traversable and costs -15 on every entry. The only terminal
+    A trap is traversable and costs -20 on every entry. The only terminal
     tile is the goal. The step limit truncates an episode (not termination).
     """
 
     metadata = {"render_modes": ["ansi"], "render_fps": 30}
-    rewards = {"path": -1.0, "blocked": -5.0, "trap": -15.0, "goal": 100.0}
+    rewards = {"path": -1.0, "water": -3.0, "blocked": -5.0, "trap": -20.0, "goal": 100.0}
 
     def __init__(self, layout=DEFAULT_MAP, max_steps=250, render_mode=None):
         super().__init__()
-        self.layout = tuple(layout)
+        self.layout = tuple(tuple(row) for row in layout)
         if (
             not self.layout
             or not self.layout[0]
             or any(len(row) != len(self.layout[0]) for row in self.layout)
         ):
             raise ValueError("Map must be a nonempty rectangle.")
-        tiles = "".join(self.layout)
-        if set(tiles) - set("S.GT#~") or tiles.count("S") != 1 or tiles.count("G") != 1:
-            raise ValueError("Use . T # ~ and exactly one S and G.")
+        tiles = [tile for row in self.layout for tile in row]
+        if any(not isinstance(tile, Tile) for tile in tiles):
+            raise ValueError("Map entries must be Tile enum members.")
+        if tiles.count(Tile.START) != 1 or tiles.count(Tile.GOAL) != 1:
+            raise ValueError("Map must contain exactly one START and one GOAL.")
         if max_steps < 1:
             raise ValueError("max_steps must be positive.")
         if render_mode not in (None, "ansi"):
             raise ValueError("Supported render mode: ansi.")
-        self.rows, self.cols = len(layout), len(layout[0])
-        self.start, self.goal = tiles.index("S"), tiles.index("G")
+        self.rows, self.cols = len(self.layout), len(self.layout[0])
+        self.start, self.goal = tiles.index(Tile.START), tiles.index(Tile.GOAL)
         self.max_steps, self.render_mode = max_steps, render_mode
         self.observation_space = spaces.Discrete(self.rows * self.cols)
         self.action_space = spaces.Discrete(len(ACTION_NAMES))
@@ -85,15 +114,17 @@ class AdventureEnv(gym.Env):
             return state, self.rewards["blocked"], False, "blocked"
         target = nr * self.cols + nc
         tile = self.tile(target)
-        if tile in "#~":
+        if tile == Tile.WALL:
             return state, self.rewards["blocked"], False, "blocked"
-        if tile == "G":
+        if tile == Tile.WATER:
+            event = "water"
+        elif tile == Tile.GOAL:
             event = "goal"
-        elif tile == "T":
+        elif tile == Tile.TRAP:
             event = "trap"
         else:
             event = "path"
-        return target, self.rewards[event], tile == "G", event
+        return target, self.rewards[event], tile == Tile.GOAL, event
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -122,7 +153,8 @@ class AdventureEnv(gym.Env):
         if self.render_mode == "ansi":
             return "\n".join(
                 " ".join(
-                    "@" if r * self.cols + c == self.state else tile for c, tile in enumerate(row)
+                    "@" if r * self.cols + c == self.state else tile.symbol
+                    for c, tile in enumerate(row)
                 )
                 for r, row in enumerate(self.layout)
             )
@@ -138,7 +170,7 @@ class AdventureEnv(gym.Env):
                 return path
             for action in Action:
                 nxt, _, _, _ = self.transition(state, action)
-                if nxt in seen or (avoid_traps and self.tile(nxt) == "T"):
+                if nxt in seen or (avoid_traps and self.tile(nxt) == Tile.TRAP):
                     continue
                 seen.add(nxt)
                 queue.append((nxt, path + [nxt]))

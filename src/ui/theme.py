@@ -1,5 +1,7 @@
 """Shared colors and dimensions for a quiet, paper-like teaching interface."""
 
+from ..model.environment import Tile
+
 BACKGROUND = "#f5f4f0"
 SURFACE = "#ffffff"
 BORDER = "#d6d7d2"
@@ -17,19 +19,26 @@ VISIT_HIGH = "#accbb6"
 TRAIL = "#7e9aa7"
 
 TILE_COLORS = {
-    ".": SURFACE,
-    "S": "#e4eee5",
-    "G": "#f4ebc9",
-    "T": "#f3e1dc",
-    "#": "#d9dcd9",
-    "~": "#e0edf2",
+    Tile.EMPTY: SURFACE,
+    Tile.START: "#e4eee5",
+    Tile.GOAL: "#f4ebc9",
+    Tile.TRAP: "#f3e1dc",
+    Tile.WALL: "#d9dcd9",
+    Tile.WATER: "#e0edf2",
 }
-TILE_NAMES = {".": "Path", "S": "Start", "G": "Goal", "T": "Trap", "#": "Wall", "~": "River"}
+TILE_NAMES = {
+    Tile.EMPTY: "Empty",
+    Tile.START: "Start",
+    Tile.GOAL: "Goal",
+    Tile.TRAP: "Trap",
+    Tile.WALL: "Wall",
+    Tile.WATER: "Water",
+}
 
 DEFAULT_SIZE = (1240, 860)
 MIN_SIZE = (1080, 720)
 MARGIN = 24
 GAP = 24
 ROW_HEIGHT = 28
-SPEEDS = (4, 30, 300, 3000)
+SPEEDS = (1, 5, 10, 20)
 VIEWS = ("Policy", "Q-values", "Visits", "Table")
