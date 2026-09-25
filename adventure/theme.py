@@ -1,36 +1,35 @@
-"""GitHub Dark-inspired palette and shared dimensions, independent of game rules."""
+"""Shared colors and dimensions for a quiet, paper-like teaching interface."""
 
-BACKGROUND = "#0d1117"
-SURFACE = "#161b22"
-BORDER = "#30363d"
-TEXT = "#e6edf3"
-MUTED = "#a4acb5"
-BLUE = "#58a6ff"
-GREEN = "#56d364"
-RED = "#ff7b72"
-YELLOW = "#d29922"
-BUTTON = "#21262d"
-BUTTON_HOVER = "#30363d"
-BUTTON_ACTIVE = "#238636"
-SELECTION = "#1c2d41"
+BACKGROUND = "#f5f4f0"
+SURFACE = "#ffffff"
+BORDER = "#d6d7d2"
+TEXT = "#292e30"
+MUTED = "#60686b"
+BLUE = "#326b87"
+GREEN = "#34694c"
+RED = "#a04438"
+YELLOW = "#87671c"
+BUTTON = "#ffffff"
+BUTTON_HOVER = "#e9eeeb"
+BUTTON_ACTIVE = "#dce9e1"
+SELECTION = "#e4eef2"
+VISIT_HIGH = "#accbb6"
+TRAIL = "#7e9aa7"
 
 TILE_COLORS = {
-    ".": BACKGROUND,
-    "S": "#16251d",
-    "G": "#292416",
-    "T": "#2d1b1e",
-    "#": "#282e36",
-    "~": "#162536",
+    ".": SURFACE,
+    "S": "#e4eee5",
+    "G": "#f4ebc9",
+    "T": "#f3e1dc",
+    "#": "#d9dcd9",
+    "~": "#e0edf2",
 }
 TILE_NAMES = {".": "Path", "S": "Start", "G": "Goal", "T": "Trap", "#": "Wall", "~": "River"}
 
 DEFAULT_SIZE = (1240, 860)
-MIN_SIZE = (1080, 760)
-MARGIN = 20
-GAP = 16
+MIN_SIZE = (1080, 720)
+MARGIN = 24
+GAP = 24
 ROW_HEIGHT = 28
 SPEEDS = (4, 30, 300, 3000)
 VIEWS = ("Policy", "Q-values", "Visits", "Table")
-
-# Light emphasis for small text; less than a normal bold font.
-TEXT_STRENGTH = 0.025

@@ -18,15 +18,18 @@ python -m adventure
 ```
 
 On Windows, activate with `.venv\Scripts\activate` instead. `python main.py` is an
-equivalent entry point. The GitHub Dark-inspired UI uses plain panels, tables,
-and symbols. The window can be resized (minimum 1080 × 760). The layout adapts
-to the available space. The window requests HiDPI support and renders fonts at
-the actual output pixel density. On a 2× Retina display, a 14-point UI label is
-rasterized at 28 pixels; its on-screen size stays the same. Only the geometric
-background is scaled, and text is drawn afterwards at full resolution.
-Text uses Pygame's FreeType renderer with a slight weight increase to make thin
-strokes easier to read on dark backgrounds. The emphasis is controlled by
-`TEXT_STRENGTH` in `theme.py`; antialiasing remains enabled.
+equivalent entry point. The UI uses a light background, restrained colors and
+simple controls. The board stays visible while the right-hand tabs switch between
+**Learning curve**, **Selected tile**, and **Learning step**. Clicking a tile opens
+its values; **Step** opens the latest calculation. Keyboard shortcuts remain
+available even though they are no longer repeated on every button.
+
+The window can be resized (minimum 1080 × 720). Text is rendered with FreeType at
+the actual output pixel density, using the font's natural weight. On a 2× Retina
+display, a 14-point label is rasterized at 28 pixels rather than enlarging a small
+bitmap. Some Pygame 2.6 builds silently map `allow_highdpi` to zero; `display.py`
+repairs that flag before creating the window. Shapes and text rendering remain
+separate from the learning algorithm.
 
 Start with **Step** to inspect individual decisions, then **Train +500** and
 **Watch**. Watch plays the greedy policy without exploration or Q-table changes.
@@ -178,11 +181,19 @@ adventure/environment.py   Grid rules and Gymnasium interface
 adventure/learning.py      Q-table, updates, training, evaluation and export
 adventure/ui.py            Interactive Pygame dashboard
 adventure/display.py       HiDPI window and rendering text at output resolution
+adventure/diagnostics.py   Optional diagnostics for the real desktop window
 adventure/theme.py         Colors, dimensions, tile labels and display options
 adventure/run.py           Command-line options
 adventure/__main__.py      Package entry point
 tests/                    Environment, algorithm and offscreen UI checks
 ```
+
+Generated files are not part of the source code. `outputs/` is created only when
+you export results, save screenshots there, or enable display diagnostics. Its
+contents can be removed when no longer needed. Python and development-tool caches
+(`__pycache__/`, `.pytest_cache/`, `.ruff_cache/`) can also be removed; they are
+regenerated automatically. These directories are ignored by Git. `.venv/` contains
+the installed dependencies and should stay in place while working on the project.
 
 For reading or changing the code, start with `environment.py` (what an action
 does), then `QLearner.update()` (the equation) and `TrainingSession.step()` (one
@@ -194,8 +205,8 @@ The UI deliberately uses one dashboard class and ordinary drawing functions.
 `draw_*()` methods render each section; `handle_event()` and `action()` handle
 input; `advance()` schedules training and playback. There is no UI framework,
 custom widget hierarchy or separate event system. Visual constants live in
-`theme.py`, independently of the game rules. The palette and system-font choice
-are inspired by [GitHub Primer](https://primer.style/product/primitives/typography/).
+`theme.py`, independently of the game rules. The light palette and plain system
+fonts keep the focus on the simulation.
 
 `display.py` isolates the Pygame SDL2 window/renderer API used for HiDPI support.
 Layout and clicks use window coordinates; text rendering uses physical pixels.
@@ -203,6 +214,20 @@ This distinction matters on Retina displays, where an ordinary Pygame software
 window can otherwise be enlarged by macOS. See the
 [Pygame HiDPI issue](https://github.com/pygame/pygame/issues/2853).
 Restart the application after updating the code so it creates the new window.
+
+If the live window still looks blurry, record its actual output configuration:
+
+```sh
+python -m adventure --diagnose-display
+```
+
+While that window is open, `outputs/display-diagnostics.json` is refreshed every
+five seconds. It records the interpreter, SDL renderer, HiDPI flag, window size,
+physical renderer output, viewport, and frame size. The output size is queried
+directly from SDL, independently of the viewport. This command intentionally
+cannot be combined with `--screenshot` or `--headless`: an offscreen image cannot
+verify how the desktop compositor displays the real window. Diagnostics are
+opt-in and do not change system display settings.
 
 ```sh
 python -m unittest discover -s tests -v

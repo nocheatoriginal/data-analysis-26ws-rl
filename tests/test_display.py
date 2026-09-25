@@ -10,10 +10,30 @@ import unittest
 import numpy as np
 import pygame as pg
 
+from adventure.diagnostics import collect
 from adventure.display import Display, TextLabel
 
 
 class DisplayTests(unittest.TestCase):
+    def test_diagnostics_measure_output_independently_of_viewport(self):
+        pg.init()
+        display = Display((320, 160))
+        try:
+            # A viewport is a drawing region, not an authoritative pixel-size API.
+            display.renderer.set_viewport(pg.Rect(0, 0, 100, 80))
+            report = collect(display)
+            self.assertEqual(report["renderer_output_pixels"], (320, 160))
+            self.assertEqual(report["renderer_viewport"], (0, 0, 100, 80))
+            self.assertEqual(report["window_points"], (320, 160))
+            self.assertEqual(report["video_driver"], "dummy")
+            self.assertTrue(report["window_hidpi_flag"])
+            # A stale viewport must not shrink or stretch the composed frame.
+            display.present()
+            self.assertEqual(display.frame.get_size(), (320, 160))
+        finally:
+            display.close()
+            pg.quit()
+
     def test_retina_text_is_rasterized_at_double_resolution(self):
         pg.init()
         display = Display((320, 160))

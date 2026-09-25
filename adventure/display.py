@@ -12,8 +12,6 @@ import pygame as pg
 import pygame.ftfont as ftfont
 from pygame._sdl2.video import Renderer, Texture, Window
 
-from . import theme
-
 
 @dataclass
 class TextLabel:
@@ -29,8 +27,12 @@ class TextLabel:
 class Display:
     def __init__(self, size):
         ftfont.init()
+        # Some Pygame 2.6 wheels map allow_highdpi to 0, silently ignoring it.
+        # Restore SDL2's SDL_WINDOW_ALLOW_HIGHDPI flag only for affected builds.
+        if Window._kwarg_to_flag.get("allow_highdpi") == 0:
+            Window._kwarg_to_flag["allow_highdpi"] = 0x00002000
         self.native_window = Window(
-            "Q-learning adventure", size=size, resizable=True, allow_highdpi=True
+            "relearn — Q-learning", size=size, resizable=True, allow_highdpi=True
         )
         self.renderer = Renderer(self.native_window)
         self.surface = pg.Surface(size)
@@ -44,11 +46,7 @@ class Display:
         if key not in self.fonts:
             family = "Menlo,Consolas,DejaVu Sans Mono" if mono else "Arial,Segoe UI,DejaVu Sans"
             font = ftfont.SysFont(family, size, bold=bold)
-            # A small weight increase keeps thin strokes legible on dark tiles.
-            # Use the same metrics for layout and rendering, including at 2x DPI.
-            if not bold:
-                font.strong = True
-                font.strength = theme.TEXT_STRENGTH
+            # Keep the font's natural weight; synthetic thickening softens small glyphs.
             self.fonts[key] = font
         return self.fonts[key]
 
@@ -61,7 +59,9 @@ class Display:
     def compose(self, pixel_size=None):
         """Build a frame in physical pixels. An explicit size is useful for tests."""
         if pixel_size is None:
-            # With no logical_size or custom viewport, SDL reports output pixels.
+            # Reset any drawing viewport before querying the full output size.
+            # The frame is then copied 1:1, with no second text-scaling pass.
+            self.renderer.set_viewport(None)
             pixel_size = self.renderer.get_viewport().size
         if self.frame is None or self.frame.get_size() != pixel_size:
             self.frame = pg.Surface(pixel_size)

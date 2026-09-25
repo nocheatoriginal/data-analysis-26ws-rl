@@ -22,6 +22,7 @@ class DashboardTests(unittest.TestCase):
             dashboard.draw()
             dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_n))
             self.assertEqual(dashboard.session.total_steps, 1)
+            self.assertEqual(dashboard.detail, "update")
             for view in range(4):
                 dashboard.view = view
                 dashboard.draw()
@@ -71,6 +72,13 @@ class DashboardTests(unittest.TestCase):
                 dashboard.draw()
                 dashboard.handle_click(dashboard.coords(23))
                 self.assertEqual(dashboard.selected, 23)
+                self.assertEqual(dashboard.detail, "tile")
+                for detail in ("chart", "tile", "update"):
+                    dashboard.action(detail)
+                    dashboard.draw()
+                    self.assertEqual(dashboard.detail, detail)
+                    for rect, _ in dashboard.buttons:
+                        self.assertTrue(dashboard.window.get_rect().contains(rect))
                 dashboard.view = 3
                 dashboard.draw()
                 dashboard.handle_click(

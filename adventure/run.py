@@ -39,7 +39,14 @@ def main():
     parser.add_argument(
         "--screenshot", metavar="PNG", help="Render a dashboard image without opening a window"
     )
+    parser.add_argument(
+        "--diagnose-display",
+        action="store_true",
+        help="Record real window/renderer pixel sizes to output/display-diagnostics.json",
+    )
     args = parser.parse_args()
+    if args.diagnose_display and (args.headless or args.screenshot):
+        parser.error("--diagnose-display requires the real desktop window")
     if args.episodes is not None and args.episodes < 0:
         parser.error("--episodes must be nonnegative")
     try:
@@ -75,7 +82,7 @@ def main():
     if not args.headless or args.screenshot:
         from .ui import Dashboard
 
-        dashboard = Dashboard(session, args.output)
+        dashboard = Dashboard(session, args.output, diagnose_display=args.diagnose_display)
         if args.screenshot:
             dashboard.screenshot(args.screenshot)
             print(f"Screenshot: {args.screenshot}")

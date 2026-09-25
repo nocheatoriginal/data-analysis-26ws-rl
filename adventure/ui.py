@@ -17,7 +17,7 @@ from .learning import TrainingSession
 
 
 class Dashboard:
-    def __init__(self, session: TrainingSession, output="outputs"):
+    def __init__(self, session: TrainingSession, output="outputs", diagnose_display=False):
         pg.init()
         desktop_width, desktop_height = pg.display.get_desktop_sizes()[0]
         size = (
@@ -29,6 +29,8 @@ class Dashboard:
         self.buttons = []
         self.session = session
         self.output = Path(output)
+        self.diagnose_display = diagnose_display
+        self.next_diagnostic = 0.0
 
         self.alive = True
         self.running = False
@@ -36,6 +38,7 @@ class Dashboard:
         self.speed = 1
         self.credit = 0.0  # Accumulated time expressed as training steps.
         self.view = 0
+        self.detail = "chart"  # Show one explanation at a time.
         self.selected = session.env.start
         self.scroll = 0
         self.watch = None
@@ -58,9 +61,10 @@ class Dashboard:
         body_bottom = height - 122
 
         self.world_panel = pg.Rect(margin, 150, left_width, body_bottom - 150)
-        self.inspector_panel = pg.Rect(right_x, 150, right_width, 218)
-        self.update_panel = pg.Rect(right_x, 380, right_width, 154)
-        self.chart_panel = pg.Rect(right_x, 546, right_width, body_bottom - 546)
+        self.detail_panel = pg.Rect(right_x, 198, right_width, body_bottom - 198)
+        self.inspector_panel = self.detail_panel
+        self.update_panel = self.detail_panel
+        self.chart_panel = self.detail_panel
         self.legend_panel = pg.Rect(margin, body_bottom + 12, left_width, 78)
         self.settings_panel = pg.Rect(right_x, body_bottom + 12, right_width, 78)
 
@@ -111,16 +115,12 @@ class Dashboard:
         return font.size(label)[0]
 
     def panel(self, rect, title):
-        pg.draw.rect(self.window, theme.BACKGROUND, rect, border_radius=4)
-        pg.draw.rect(self.window, theme.BORDER, rect, 1, border_radius=4)
-        header = pg.Rect(rect.x + 1, rect.y + 1, rect.width - 2, 34)
-        pg.draw.rect(self.window, theme.SURFACE, header)
-        pg.draw.line(self.window, theme.BORDER, header.bottomleft, header.bottomright)
-        self.text(title, rect.x + 12, rect.y + 9, bold=True)
+        pg.draw.rect(self.window, theme.SURFACE, rect, border_radius=4)
+        self.text(title, rect.x + 12, rect.y + 12, bold=True)
 
-    def button(self, label, x, action, active=False):
+    def button(self, label, x, action, active=False, y=100):
         width = self.font().size(label)[0] + 24
-        rect = pg.Rect(x, 100, width, 32)
+        rect = pg.Rect(x, y, width, 34)
         color = theme.BUTTON_ACTIVE if active else theme.BUTTON
         if not active and rect.collidepoint(pg.mouse.get_pos()):
             color = theme.BUTTON_HOVER
@@ -155,28 +155,28 @@ class Dashboard:
             pg.draw.line(self.window, color, tip, wing, 2)
 
     def draw_header(self):
-        self.text("Q-learning adventure", 20, 20, 23, bold=True)
-        self.text("Grid environment / Tabular reinforcement learning", 20, 54, color=theme.MUTED)
+        self.text("relearn", theme.MARGIN, 20, 26, bold=True)
+        self.text("Learn by trying. Find a route to the goal.", theme.MARGIN, 57, color=theme.MUTED)
         recent = self.session.history[-100:]
         success = f"{sum(item['success'] for item in recent) / len(recent):.0%}" if recent else "--"
         stats = (
             ("Episodes", f"{len(self.session.history):,}"),
-            ("Epsilon", f"{self.session.epsilon:.1%}"),
-            ("Success / last 100", success),
+            ("Exploration", f"{self.session.epsilon:.1%}"),
+            ("Success (last 100)", success),
         )
         for index, (label, value) in enumerate(stats):
             x = self.inspector_panel.x + index * self.inspector_panel.width // 3
             self.text(label, x, 22, color=theme.MUTED)
             self.text(value, x, 47, 20, mono=True)
         controls = (
-            ("Pause [Space]" if self.running else "Run [Space]", "run", self.running),
-            ("Step [N]", "step", False),
+            ("Pause" if self.running else "Run", "run", self.running),
+            ("Step", "step", False),
             ("Train +500", "batch", self.target is not None),
-            ("Watch [W]", "watch", self.watch is not None),
-            (f"{theme.VIEWS[self.view]} [Q]", "view", False),
+            ("Watch route", "watch", self.watch is not None),
+            (f"View: {theme.VIEWS[self.view]}", "view", False),
             (f"{theme.SPEEDS[self.speed]:,} steps/s", "speed", False),
-            ("Export [E]", "export", False),
-            ("Reset [R]", "reset", False),
+            ("Export", "export", False),
+            ("Reset", "reset", False),
         )
         x = theme.MARGIN
         for label, action, active in controls:
@@ -185,19 +185,22 @@ class Dashboard:
     def draw_q_values(self, state, rect):
         pg.draw.line(self.window, theme.BORDER, rect.topleft, rect.bottomright)
         pg.draw.line(self.window, theme.BORDER, rect.topright, rect.bottomleft)
+        labels = [str(round(value)) for value in self.session.agent.q[state]]
+        # Left and right values each get half a cell, with a gap between them.
+        size = 13
+        available_width = self.cell_size // 2 - 4
+        while (
+            size > 9
+            and max(self.font(size, mono=True).size(label)[0] for label in labels) > available_width
+        ):
+            size -= 1
         for action, (dy, dx) in enumerate(DELTAS):
-            value = self.session.agent.q[state, action]
-            # Keep wide values such as -100 inside small cells after a resize.
-            label = str(round(value))
-            label_width = self.font(13, mono=True).size(label)[0]
-            offset_x = min(self.cell_size // 3, (self.cell_size - label_width) // 2 - 2)
-            offset_y = self.cell_size // 3
             self.text(
-                label,
-                rect.centerx + dx * offset_x,
-                rect.centery + dy * offset_y,
-                13,
-                self.value_color(value),
+                labels[action],
+                rect.centerx + dx * (self.cell_size // 4),
+                rect.centery + dy * (self.cell_size // 3),
+                size,
+                self.value_color(self.session.agent.q[state, action]),
                 mono=True,
                 center=True,
             )
@@ -211,7 +214,7 @@ class Dashboard:
         color = pg.Color(theme.TILE_COLORS[tile])
         if self.view == 2 and tile not in "#~G":
             intensity = np.log1p(visits) / np.log1p(max_visits)
-            color = pg.Color(theme.BACKGROUND).lerp(pg.Color("#214f36"), intensity)
+            color = pg.Color(theme.SURFACE).lerp(pg.Color(theme.VISIT_HIGH), intensity)
         pg.draw.rect(self.window, color, rect)
         pg.draw.rect(self.window, theme.BORDER, rect, 1)
 
@@ -228,17 +231,14 @@ class Dashboard:
         else:
             pg.draw.circle(self.window, theme.BORDER, center, 2)
 
-        if tile in "ST":
+        if tile in "ST" and self.view != 1:
             label_color = theme.GREEN if tile == "S" else theme.RED
-            if self.view == 1:
-                self.text(tile, *center, 11, label_color, mono=True, center=True)
-            else:
-                self.text(tile, rect.x + 5, rect.y + 3, 13, label_color, bold=True)
+            self.text(tile, rect.x + 5, rect.y + 3, 13, label_color, bold=True)
         if state == self.selected:
             pg.draw.rect(self.window, theme.BLUE, rect.inflate(-2, -2), 2)
 
     def draw_board(self):
-        self.panel(self.world_panel, f"Grid / {theme.VIEWS[self.view]}")
+        self.panel(self.world_panel, f"Environment · {theme.VIEWS[self.view]}")
         env = self.session.env
         for column in range(env.cols):
             x = self.board.x + column * self.cell_size + self.cell_size // 2
@@ -256,7 +256,7 @@ class Dashboard:
             trail = self.watch["path"][: self.watch_index + 1]
             current = self.watch["path"][self.watch_index]
         if self.view == 0 and len(trail) > 1:
-            pg.draw.lines(self.window, "#365777", False, [self.coords(s) for s in trail], 2)
+            pg.draw.lines(self.window, theme.TRAIL, False, [self.coords(s) for s in trail], 2)
         x, y = self.coords(current)
         marker = (x + self.cell_size // 2 - 8, y - self.cell_size // 2 + 8)
         pg.draw.circle(self.window, theme.BLUE, marker, 5)
@@ -304,6 +304,22 @@ class Dashboard:
             color=theme.MUTED,
         )
 
+    def draw_details(self):
+        """Keep the board visible while choosing one supporting explanation."""
+        x = self.detail_panel.x
+        for label, name in (
+            ("Learning curve", "chart"),
+            ("Selected tile", "tile"),
+            ("Learning step", "update"),
+        ):
+            x = self.button(label, x, name, self.detail == name, y=150)
+        if self.detail == "tile":
+            self.draw_inspector()
+        elif self.detail == "update":
+            self.draw_update()
+        else:
+            self.draw_chart()
+
     def draw_inspector(self):
         panel = self.inspector_panel
         state = self.selected
@@ -318,18 +334,18 @@ class Dashboard:
         self.text("Visits", panel.right - 60, y, color=theme.MUTED)
         values = agent.q[state]
         scale = max(1.0, float(np.abs(values).max()))
-        axis_x = panel.x + 175
+        axis_x = panel.x + 145
         for action, name in enumerate(ACTION_NAMES):
             row_y = y + 27 + action * 28
             best = agent.visits[state].sum() > 0 and values[action] == values.max()
             self.text(name.capitalize(), x, row_y, color=theme.BLUE if best else theme.TEXT)
             pg.draw.line(
-                self.window, theme.BORDER, (axis_x - 60, row_y + 8), (axis_x + 60, row_y + 8), 4
+                self.window, theme.BORDER, (axis_x - 40, row_y + 8), (axis_x + 40, row_y + 8), 4
             )
             pg.draw.line(self.window, theme.MUTED, (axis_x, row_y + 1), (axis_x, row_y + 15))
             value = float(values[action])
             if value:
-                end_x = axis_x + round(value / scale * 60)
+                end_x = axis_x + round(value / scale * 40)
                 pg.draw.line(
                     self.window, self.value_color(value), (axis_x, row_y + 8), (end_x, row_y + 8), 4
                 )
@@ -340,7 +356,7 @@ class Dashboard:
             if tile in "#~G"
             else "Q = estimated discounted return"
         )
-        self.text(note, x, panel.bottom - 22, 13, theme.MUTED)
+        self.text(note, x, y + 151, 13, theme.MUTED)
 
     def draw_update(self):
         panel = self.update_panel
@@ -475,15 +491,23 @@ class Dashboard:
             self.draw_table()
         else:
             self.draw_board()
-        self.draw_inspector()
-        self.draw_update()
-        self.draw_chart()
+        self.draw_details()
         self.draw_notes()
         width, height = self.window.get_size()
         pg.draw.line(self.window, theme.BORDER, (0, height - 29), (width, height - 29))
         self.text(self.status, theme.MARGIN, height - 21, 13, theme.MUTED, max_width=width - 120)
         self.text("Esc: quit", width - 70, height - 21, 13, theme.MUTED)
         self.display.present()
+        if self.diagnose_display and time.monotonic() >= self.next_diagnostic:
+            from .diagnostics import save
+
+            try:
+                path = save(self.display, self.output)
+                print(f"Live display diagnostics: {path.resolve()}", flush=True)
+            except (OSError, AttributeError, RuntimeError) as error:
+                print(f"Display diagnostics failed: {error}", flush=True)
+                self.diagnose_display = False
+            self.next_diagnostic = time.monotonic() + 5
 
     def stop_training(self):
         self.running = False
@@ -492,7 +516,9 @@ class Dashboard:
 
     def action(self, action):
         """Toolbar and keyboard commands share the same code path."""
-        if action == "view":
+        if action in ("chart", "tile", "update"):
+            self.detail = action
+        elif action == "view":
             self.view = (self.view + 1) % len(theme.VIEWS)
         elif action == "speed":
             self.speed = (self.speed + 1) % len(theme.SPEEDS)
@@ -513,6 +539,7 @@ class Dashboard:
             self.watch = None
             update = self.session.step()
             self.selected = update["state"]
+            self.detail = "update"
             self.status = "One transition learned. The updated state is selected."
         elif action == "batch":
             self.watch = None
@@ -557,10 +584,12 @@ class Dashboard:
             state = self.scroll + (y - self.table_body.y) // theme.ROW_HEIGHT
             if state < len(self.session.agent.q):
                 self.selected = state
+                self.detail = "tile"
         elif self.view != 3 and self.board.collidepoint(position):
             row = (y - self.board.y) // self.cell_size
             column = (x - self.board.x) // self.cell_size
             self.selected = row * self.session.env.cols + column
+            self.detail = "tile"
 
     def handle_event(self, event):
         if event.type in (pg.QUIT, pg.WINDOWCLOSE):
