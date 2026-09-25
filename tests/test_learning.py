@@ -7,8 +7,8 @@ from pathlib import Path
 import numpy as np
 from gymnasium.utils.env_checker import check_env
 
-from adventure.environment import Action, AdventureEnv
-from adventure.learning import Config, QLearner, TrainingSession
+from src.model.environment import Action, AdventureEnv
+from src.model.learning import Config, QLearner, TrainingSession
 
 
 class EnvironmentTests(unittest.TestCase):

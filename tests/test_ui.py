@@ -10,9 +10,9 @@ import unittest
 
 import pygame as pg
 
-from adventure import theme
-from adventure.learning import TrainingSession
-from adventure.ui import Dashboard
+from src.model.learning import TrainingSession
+from src.ui import theme
+from src.ui.dashboard import Dashboard
 
 
 class DashboardTests(unittest.TestCase):

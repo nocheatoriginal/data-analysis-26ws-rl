@@ -1,10 +1,10 @@
-"""Run with python -m adventure; train without a window using --headless."""
+"""Run with python -m src; train without a window using --headless."""
 
 import argparse
 import os
 
-from .environment import AdventureEnv
-from .learning import Config, TrainingSession
+from .model.environment import AdventureEnv
+from .model.learning import Config, TrainingSession
 
 
 def main():
@@ -80,7 +80,7 @@ def main():
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         os.environ["SDL_AUDIODRIVER"] = "dummy"
     if not args.headless or args.screenshot:
-        from .ui import Dashboard
+        from .ui.dashboard import Dashboard
 
         dashboard = Dashboard(session, args.output, diagnose_display=args.diagnose_display)
         if args.screenshot:

@@ -1,4 +1,4 @@
-# Q-learning adventure
+# relearn — Q-learning simulation
 
 A Python project for exploring reinforcement learning in a small adventure game.
 An agent learns to reach a treasure by exploring an 8 × 10 grid, avoiding traps,
@@ -14,7 +14,7 @@ Requires Python 3.10 or newer. From this directory:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m adventure
+python -m src
 ```
 
 On Windows, activate with `.venv\Scripts\activate` instead. `python main.py` is an
@@ -60,9 +60,9 @@ terminal goal have no action decisions; their unused table rows stay zero.
 ## Train and export without a window
 
 ```sh
-python -m adventure --headless --episodes 2000 --seed 7
-python -m adventure --episodes 2000
-python -m adventure --headless --episodes 2000 --screenshot outputs/dashboard.png
+python -m src --headless --episodes 2000 --seed 7
+python -m src --episodes 2000
+python -m src --headless --episodes 2000 --screenshot outputs/dashboard.png
 ```
 
 The second command opens an already trained dashboard. A screenshot uses an
@@ -129,14 +129,14 @@ the most recent 25 episodes at each point. The success statistic uses the last
 Try changing one setting at a time:
 
 ```sh
-python -m adventure --alpha 0.1 --gamma 0.98 --epsilon-decay 0.998 --seed 21
-python -m adventure --headless --episodes 2000 --epsilon 0.1 --output outputs/low-exploration
+python -m src --alpha 0.1 --gamma 0.98 --epsilon-decay 0.998 --seed 21
+python -m src --headless --episodes 2000 --epsilon 0.1 --output outputs/low-exploration
 ```
 
 Compare learning speed, episode returns, success rates and the final route. Very
 low exploration can leave promising paths undiscovered. A low discount factor
 can make immediate costs dominate distant treasure. Edit `DEFAULT_MAP` in
-`adventure/environment.py` to experiment with level design. The grid layout
+`src/model/environment.py` to experiment with level design. The grid layout
 adapts to the number of rows and columns, but keep maps small so the four Q-values
 per cell stay readable. The environment validates tile symbols and checks that
 the goal is reachable.
@@ -148,7 +148,7 @@ the maintained successor to OpenAI Gym. It exposes discrete observation/action
 spaces and separates goal termination from time-limit truncation:
 
 ```python
-from adventure.environment import AdventureEnv
+from src.model.environment import AdventureEnv
 
 env = AdventureEnv(render_mode="ansi")
 observation, info = env.reset(seed=7)
@@ -177,16 +177,30 @@ not include a driving simulator, neural network, or the referenced Udemy course.
 ## Structure and verification
 
 ```text
-adventure/environment.py   Grid rules and Gymnasium interface
-adventure/learning.py      Q-table, updates, training, evaluation and export
-adventure/ui.py            Interactive Pygame dashboard
-adventure/display.py       HiDPI window and rendering text at output resolution
-adventure/diagnostics.py   Optional diagnostics for the real desktop window
-adventure/theme.py         Colors, dimensions, tile labels and display options
-adventure/run.py           Command-line options
-adventure/__main__.py      Package entry point
-tests/                    Environment, algorithm and offscreen UI checks
+main.py                   Start with python main.py
+src/
+    __main__.py           Command-line options and application startup
+    model/
+        environment.py    Grid rules and Gymnasium interface
+        learning.py       Q-table, training, evaluation and export
+    ui/
+        dashboard.py      Drawing, input handling and interactive training loop
+        display.py        HiDPI window and text rendering
+        theme.py          Colors, dimensions and labels
+        diagnostics.py    Optional desktop display diagnostics
+tests/                    Environment, learning and UI checks
 ```
+
+`model/` has no dependency on the UI or Pygame. `ui/` reads the model and calls
+its training methods in response to input. `__main__.py` parses command-line
+options and starts either headless training or the dashboard. This is a simple
+UI/logic split; drawing and input handling stay together in the dashboard rather
+than introducing a separate MVC controller. Each package also has a small
+`__init__.py` file so Python can import it normally.
+
+Run commands from the project root. `python main.py` and `python -m src` use the
+same entry point; the previous `python -m adventure` command is replaced.
+
 
 Generated files are not part of the source code. `outputs/` is created only when
 you export results, save screenshots there, or enable display diagnostics. Its
@@ -218,7 +232,7 @@ Restart the application after updating the code so it creates the new window.
 If the live window still looks blurry, record its actual output configuration:
 
 ```sh
-python -m adventure --diagnose-display
+python -m src --diagnose-display
 ```
 
 While that window is open, `outputs/display-diagnostics.json` is refreshed every

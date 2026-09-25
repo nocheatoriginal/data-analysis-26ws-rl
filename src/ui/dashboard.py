@@ -10,10 +10,10 @@ from pathlib import Path
 import numpy as np
 import pygame as pg
 
+from ..model.environment import ACTION_NAMES, DELTAS, AdventureEnv
+from ..model.learning import TrainingSession
 from . import theme
 from .display import Display, TextLabel
-from .environment import ACTION_NAMES, DELTAS, AdventureEnv
-from .learning import TrainingSession
 
 
 class Dashboard:

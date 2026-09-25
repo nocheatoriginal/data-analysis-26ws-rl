@@ -10,8 +10,8 @@ import unittest
 import numpy as np
 import pygame as pg
 
-from adventure.diagnostics import collect
-from adventure.display import Display, TextLabel
+from src.ui.diagnostics import collect
+from src.ui.display import Display, TextLabel
 
 
 class DisplayTests(unittest.TestCase):
