@@ -42,6 +42,10 @@ class Dashboard:
         self.running = False
         self.speed = 1
         self.view = 0
+        self.adventure = False
+        self.sprites = {}
+        self.scaled_sprites = {}
+        self.sprite_size = None
         self.detail = "update"  # Show one explanation at a time.
         self.selected = session.env.start
         self.scroll = 0
@@ -183,6 +187,7 @@ class Dashboard:
             ),
             (f"View: {theme.VIEWS[self.view]}", "view", False),
             (f"{theme.SPEEDS[self.speed]} moves/s", "speed", False),
+            ("Adventure View", "adventure", self.adventure),
         )
         x = theme.MARGIN
         for label, action, active in controls:
@@ -211,11 +216,31 @@ class Dashboard:
                 center=True,
             )
 
+    def prepare_sprites(self):
+        """Load once and use nearest-neighbor scaling to keep the pixel art sharp."""
+        if not self.sprites:
+            directory = Path(__file__).resolve().parents[2] / "assets" / "sprites"
+            for name in (*[tile.name.lower() for tile in Tile], "player"):
+                self.sprites[name] = pg.image.load(str(directory / f"{name}.png"))
+        if self.sprite_size != self.cell_size:
+            self.scaled_sprites = {
+                name: pg.transform.scale(sprite, (self.cell_size, self.cell_size))
+                for name, sprite in self.sprites.items()
+            }
+            self.sprite_size = self.cell_size
+
     def draw_tile(self, state, max_visits):
         tile = self.session.env.tile(state)
         center = self.coords(state)
         rect = pg.Rect(0, 0, self.cell_size, self.cell_size)
         rect.center = center
+        if self.adventure:
+            self.window.blit(self.scaled_sprites["empty"], rect)
+            if tile != Tile.EMPTY:
+                self.window.blit(self.scaled_sprites[tile.name.lower()], rect)
+            if state == self.selected:
+                pg.draw.rect(self.window, theme.BLUE, rect.inflate(-2, -2), 2)
+            return
         visits = int(self.session.agent.visits[state].sum())
         color = pg.Color(theme.TILE_COLORS[tile])
         if self.view == 2 and tile not in (Tile.WALL, Tile.GOAL):
@@ -250,7 +275,10 @@ class Dashboard:
             pg.draw.rect(self.window, theme.BLUE, rect.inflate(-2, -2), 2)
 
     def draw_board(self):
-        self.panel(self.world_panel, f"Environment · {theme.VIEWS[self.view]}")
+        title = "Adventure" if self.adventure else theme.VIEWS[self.view]
+        self.panel(self.world_panel, f"Environment · {title}")
+        if self.adventure:
+            self.prepare_sprites()
         env = self.session.env
         for column in range(env.cols):
             x = self.board.x + column * self.cell_size + self.cell_size // 2
@@ -267,11 +295,21 @@ class Dashboard:
         if self.watch is not None:
             trail = self.watch["path"][: self.watch_index + 1]
             current = self.watch["path"][self.watch_index]
-        if self.view == 0 and len(trail) > 1:
-            pg.draw.lines(self.window, theme.TRAIL, False, [self.coords(s) for s in trail], 2)
+        if (self.view == 0 or self.adventure) and len(trail) > 1:
+            points = [self.coords(s) for s in trail]
+            if self.adventure:
+                # Outline the route so it stays visible on every sprite's palette.
+                pg.draw.lines(self.window, theme.TEXT, False, points, 5)
+                pg.draw.lines(self.window, "#ffe6a3", False, points, 3)
+            else:
+                pg.draw.lines(self.window, theme.TRAIL, False, points, 2)
         x, y = self.coords(current)
-        marker = (x + self.cell_size // 2 - 8, y - self.cell_size // 2 + 8)
-        pg.draw.circle(self.window, theme.BLUE, marker, 5)
+        if self.adventure:
+            player = self.scaled_sprites["player"]
+            self.window.blit(player, player.get_rect(center=(x, y)))
+        else:
+            marker = (x + self.cell_size // 2 - 8, y - self.cell_size // 2 + 8)
+            pg.draw.circle(self.window, theme.BLUE, marker, 5)
         if self.watch_index:
             step = self.watch["steps"][self.watch_index - 1]
             if step["event"] == "blocked":
@@ -466,7 +504,9 @@ class Dashboard:
             13,
         )
         self.text(
-            "S start   G goal   T trap   # wall   ~ water   /   Blue dot: agent",
+            "Sprites: terrain and agent   /   Gold line: path"
+            if self.adventure
+            else "S start   G goal   T trap   # wall   ~ water   /   Blue dot: agent",
             x,
             y + 49,
             13,
@@ -503,7 +543,7 @@ class Dashboard:
         self.window.fill(theme.BACKGROUND)
         self.buttons.clear()
         self.draw_header()
-        if self.view == 3:
+        if self.view == 3 and not self.adventure:
             self.draw_table()
         else:
             self.draw_board()
@@ -570,7 +610,10 @@ class Dashboard:
         elif action in ("chart", "tile", "update"):
             self.detail = action
         elif action == "view":
+            self.adventure = False
             self.view = (self.view + 1) % len(theme.VIEWS)
+        elif action == "adventure":
+            self.adventure = not self.adventure
         elif action == "speed":
             self.speed = (self.speed + 1) % len(theme.SPEEDS)
         elif action == "mode":
@@ -589,12 +632,12 @@ class Dashboard:
                 self.action(action)
                 return
         x, y = position
-        if self.view == 3 and self.table_body.collidepoint(position):
+        if self.view == 3 and not self.adventure and self.table_body.collidepoint(position):
             state = self.scroll + (y - self.table_body.y) // theme.ROW_HEIGHT
             if state < len(self.session.agent.q):
                 self.selected = state
                 self.detail = "tile"
-        elif self.view != 3 and self.board.collidepoint(position):
+        elif (self.view != 3 or self.adventure) and self.board.collidepoint(position):
             row = (y - self.board.y) // self.cell_size
             column = (x - self.board.x) // self.cell_size
             self.selected = row * self.session.env.cols + column
@@ -614,6 +657,7 @@ class Dashboard:
                 pg.K_w: "mode",
                 pg.K_q: "view",
                 pg.K_r: "restart",
+                pg.K_a: "adventure",
             }
             if event.key == pg.K_ESCAPE:
                 self.alive = False
@@ -621,7 +665,7 @@ class Dashboard:
                 self.action(shortcuts[event.key])
             elif pg.K_1 <= event.key <= pg.K_8:
                 self.action(f"checkpoint:{CHECKPOINTS[event.key - pg.K_1]}")
-        elif event.type == pg.MOUSEWHEEL and self.view == 3:
+        elif event.type == pg.MOUSEWHEEL and self.view == 3 and not self.adventure:
             self.scroll -= event.y * 3
             self.clamp_scroll()
         elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:

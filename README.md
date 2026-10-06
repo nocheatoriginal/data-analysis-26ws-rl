@@ -86,6 +86,7 @@ Q-values or visit counts. Loaded arrays are read-only.
 | Restart / R | Rewind the selected playback |
 | Mode button / W | Switch recorded episode / learned route |
 | View / Q | Policy, Q-values, visits, full table |
+| Adventure View / A | Toggle sprite map with the player and visible playback path; return to the previous view |
 | Speed button | 1, 5, 10 or 20 moves per second |
 | Click tile or table row | Inspect its action values |
 | Mouse wheel in table | Scroll all states |

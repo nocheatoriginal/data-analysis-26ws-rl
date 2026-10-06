@@ -92,6 +92,43 @@ class DashboardTests(unittest.TestCase):
             dashboard.display.close()
             pg.quit()
 
+    def test_adventure_preserves_playback_and_shows_path_above_sprites(self):
+        dashboard = Dashboard(self.output.name, checkpoint=100)
+        try:
+            dashboard.action("mode")
+            dashboard.action("play")
+            dashboard.advance(1)
+            index = dashboard.watch_index
+            q = dashboard.session.agent.q.copy()
+            dashboard.view = 3
+            dashboard.draw()
+            button = next(rect for rect, action in dashboard.buttons if action == "adventure")
+            dashboard.handle_click(button.center)
+            self.assertTrue(dashboard.adventure)
+            self.assertTrue(dashboard.running)
+            self.assertEqual(dashboard.watch_index, index)
+            for width, height in (theme.MIN_SIZE, theme.DEFAULT_SIZE, (1600, 1000)):
+                dashboard.handle_event(pg.event.Event(pg.VIDEORESIZE, w=width, h=height))
+                dashboard.draw()
+                for rect, _ in dashboard.buttons:
+                    self.assertTrue(dashboard.window.get_rect().contains(rect))
+                # The path must be drawn on top of terrain, even when entered from Table.
+                start, following = dashboard.watch["path"][:2]
+                a, b = dashboard.coords(start), dashboard.coords(following)
+                midpoint = ((a[0] + b[0]) // 2, (a[1] + b[1]) // 2)
+                self.assertEqual(dashboard.window.get_at(midpoint), pg.Color("#ffe6a3"))
+                dashboard.handle_click(dashboard.coords(23))
+                self.assertEqual(dashboard.selected, 23)
+                self.assertEqual(dashboard.detail, "tile")
+            dashboard.handle_event(pg.event.Event(pg.KEYDOWN, key=pg.K_a))
+            self.assertFalse(dashboard.adventure)
+            self.assertEqual(dashboard.view, 3)
+            self.assertEqual(dashboard.watch_index, index)
+            np.testing.assert_array_equal(dashboard.session.agent.q, q)
+        finally:
+            dashboard.display.close()
+            pg.quit()
+
     def test_resize_keeps_text_size_and_click_targets(self):
         dashboard = Dashboard(self.output.name)
         try:
